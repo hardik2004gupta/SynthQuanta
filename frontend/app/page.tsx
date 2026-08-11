@@ -1,5 +1,6 @@
 'use client'
 
+<<<<<<< Updated upstream
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowUpRight, BarChart3, Check, ChevronRight, CircleDot, Cpu, Database, Gauge, GitBranch, Hexagon, Keyboard, Layers3, Menu, Play, Radio, Search, Server, Settings2, Sparkles, Terminal, Zap } from 'lucide-react'
 import { api, type DatasetResponse, type ExperimentResponse } from '../lib/api'
@@ -11,210 +12,24 @@ const stages = [
   { id: 'optimize', num: '04', label: 'OPTIMIZE', sub: 'QUANTIZATION LAB', icon: Zap },
   { id: 'runtime', num: '05', label: 'RUNTIME', sub: 'SERVE CONSOLE', icon: Server },
 ]
+=======
+import { useState, useCallback } from 'react'
+import WorkflowNav from '@/components/WorkflowNav'
+import Overview from '@/components/Overview'
+import DataStudio from '@/components/DataStudio'
+import TrainLab from '@/components/TrainLab'
+import EvalLab from '@/components/EvalLab'
+import QuantizeLab from '@/components/QuantizeLab'
+import RuntimeConsole from '@/components/RuntimeConsole'
+import BenchmarkLab from '@/components/BenchmarkLab'
+import type { DatasetResponse, EvaluationResponse, QuantizationResponse, BenchmarkResponse } from '@/lib/api'
 
-const metrics = [
-  ['F1 SCORE', '93.4%', '+2.8%', 'positive'],
-  ['P95 LATENCY', '5.8 ms', '-41%', 'positive'],
-  ['THROUGHPUT', '184 req/s', '+16%', 'cyan'],
-  ['ARTIFACT SIZE', '412 MB', '-68%', 'violet'],
-]
+export type Stage = 'OVERVIEW' | 'DATA' | 'TRAIN' | 'EVALUATE' | 'OPTIMIZE' | 'RUNTIME' | 'BENCHMARK'
+>>>>>>> Stashed changes
 
-const signalA = 'M0 86 C12 72 18 78 30 52 S48 40 61 66 S80 104 94 65 S111 22 125 49 S145 77 160 54 S175 28 188 56 S208 82 222 48 S240 35 255 63 S272 94 286 58 S305 24 320 50 S338 76 353 55 S369 31 385 57 S402 87 420 48 S437 30 452 52 S470 72 488 46 S505 34 520 58 S540 88 556 48 S574 27 590 51 S608 72 625 48 S642 36 660 55 S678 78 694 44 S712 24 730 50 S748 82 766 46 S784 28 800 53'
-
-function previewToSvgPath(preview: [number, number | null][]): string {
-  const pts = preview.filter(p => p[1] !== null) as [number, number][]
-  if (pts.length < 2) return ''
-  const minT = pts[0][0], maxT = pts[pts.length - 1][0]
-  const vs = pts.map(p => p[1])
-  const minV = Math.min(...vs), maxV = Math.max(...vs)
-  const rT = maxT - minT || 1
-  const cV = (minV + maxV) / 2
-  const aV = (maxV - minV) / 2 || 1
-  return pts.map(([t, v], i) => {
-    const x = ((t - minT) / rT) * 800
-    const y = 60 - ((v - cV) / aV) * 50
-    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`
-  }).join(' ')
-}
-
-function Panel({ title, eyebrow, children, className = '' }: { title: string; eyebrow?: string; children: React.ReactNode; className?: string }) {
-  return <section className={`panel ${className}`}><div className="panel-head"><div><span className="eyebrow">{eyebrow ?? 'SYSTEM MODULE'}</span><h2>{title}</h2></div><button className="icon-button" aria-label={`Open ${title}`}><ArrowUpRight size={14} /></button></div>{children}</section>
-}
-
-function Sparkline({ color = 'cyan', points = '0,32 12,26 24,30 36,18 48,22 60,11 72,17 84,8 96,12' }: { color?: string; points?: string }) {
-  return <svg className="sparkline" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline points={points} fill="none" stroke={`var(--${color})`} strokeWidth="1.4" vectorEffect="non-scaling-stroke" /></svg>
-}
-
-function Topology() {
-  const nodes = [
-    { x: 12, y: 50, name: 'DS-0042', desc: '48K SAMPLES', icon: Database, tone: 'cyan' },
-    { x: 36, y: 26, name: 'EXP-0042', desc: 'ADAPTER V3', icon: GitBranch, tone: 'violet' },
-    { x: 60, y: 50, name: 'EVAL-021', desc: 'ROBUSTNESS', icon: Gauge, tone: 'amber' },
-    { x: 84, y: 26, name: 'Q-INT8', desc: '412 MB ARTIFACT', icon: Cpu, tone: 'positive' },
-  ]
-  return <div className="topology"><svg viewBox="0 0 100 76" preserveAspectRatio="none" aria-hidden="true"><path d="M12 50 L36 26 L60 50 L84 26" /><path className="dash" d="M12 50 L36 26 L60 50 L84 26" /></svg>{nodes.map(({ x, y, name, desc, icon: Icon, tone }) => <div key={name} className={`topo-node ${tone}`} style={{ left: `${x}%`, top: `${y}%` }}><div className="node-core"><Icon size={15} /></div><div className="node-copy"><strong>{name}</strong><span>{desc}</span></div></div>)}</div>
-}
-
-// ---------------------------------------------------------------------------
-// Signal Studio — DATA stage panel
-// ---------------------------------------------------------------------------
-
-const _inp: React.CSSProperties = { width: '100%', padding: '6px 9px', background: '#060a10', border: '1px solid var(--border)', color: 'var(--foreground)', fontSize: '11px', fontFamily: 'var(--font-mono)', marginTop: '4px', outline: 'none' }
-const _lbl: React.CSSProperties = { fontSize: '9px', letterSpacing: '.12em', color: '#6d7e90', display: 'block' }
-
-interface StudioProps {
-  name: string; onName: (v: string) => void
-  seed: number; onSeed: (v: number) => void
-  sigType: string; onSigType: (v: string) => void
-  duration: number; onDuration: (v: number) => void
-  rate: number; onRate: (v: number) => void
-  amplitude: number; onAmplitude: (v: number) => void
-  frequency: number; onFrequency: (v: number) => void
-  windowSize: number; onWindowSize: (v: number) => void
-  noise: boolean; onNoise: (v: boolean) => void
-  drift: boolean; onDrift: (v: boolean) => void
-  dropout: boolean; onDropout: (v: boolean) => void
-  clipping: boolean; onClipping: (v: boolean) => void
-  loading: boolean; error: string | null; result: DatasetResponse | null
-  onGenerate: () => void
-}
-
-function SignalStudio(p: StudioProps) {
-  const faults: Array<[string, boolean, (v: boolean) => void]> = [
-    ['NOISE', p.noise, p.onNoise],
-    ['DRIFT', p.drift, p.onDrift],
-    ['DROPOUT', p.dropout, p.onDropout],
-    ['CLIPPING', p.clipping, p.onClipping],
-  ]
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: '340px' }}>
-      <div style={{ padding: '24px 28px', borderRight: '1px solid var(--border)' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
-          <div style={{ gridColumn: '1 / -1' }}>
-            <label style={_lbl}>DATASET NAME</label>
-            <input style={_inp} value={p.name} onChange={e => p.onName(e.target.value)} />
-          </div>
-          <div>
-            <label style={_lbl}>SIGNAL TYPE</label>
-            <select style={_inp} value={p.sigType} onChange={e => p.onSigType(e.target.value)}>
-              <option value="sinusoidal">SINUSOIDAL</option>
-              <option value="composite">COMPOSITE</option>
-              <option value="trend">TREND</option>
-              <option value="periodic">PERIODIC</option>
-            </select>
-          </div>
-          <div>
-            <label style={_lbl}>SEED</label>
-            <input style={_inp} type="number" value={p.seed} onChange={e => p.onSeed(Number(e.target.value))} min={0} max={2147483647} />
-          </div>
-          <div>
-            <label style={_lbl}>DURATION (s)</label>
-            <input style={_inp} type="number" value={p.duration} onChange={e => p.onDuration(Number(e.target.value))} min={0.1} max={3600} step={0.5} />
-          </div>
-          <div>
-            <label style={_lbl}>SAMPLING RATE (Hz)</label>
-            <input style={_inp} type="number" value={p.rate} onChange={e => p.onRate(Number(e.target.value))} min={1} max={10000} />
-          </div>
-          <div>
-            <label style={_lbl}>AMPLITUDE</label>
-            <input style={_inp} type="number" value={p.amplitude} onChange={e => p.onAmplitude(Number(e.target.value))} step={0.1} min={0.01} />
-          </div>
-          <div>
-            <label style={_lbl}>FREQUENCY (Hz)</label>
-            <input style={_inp} type="number" value={p.frequency} onChange={e => p.onFrequency(Number(e.target.value))} step={1} min={0.1} />
-          </div>
-          <div>
-            <label style={_lbl}>WINDOW SIZE</label>
-            <input style={_inp} type="number" value={p.windowSize} onChange={e => p.onWindowSize(Number(e.target.value))} min={8} max={4096} step={8} />
-          </div>
-          <div style={{ gridColumn: '1 / -1' }}>
-            <span style={_lbl}>FAULT INJECTION</span>
-            <div style={{ display: 'flex', gap: '16px', marginTop: '8px', flexWrap: 'wrap' }}>
-              {faults.map(([label, checked, setter]) => (
-                <label key={label} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '9px', letterSpacing: '.1em', color: checked ? 'var(--amber)' : 'var(--muted)' }}>
-                  <input type="checkbox" checked={checked} onChange={e => setter(e.target.checked)} style={{ accentColor: 'var(--amber)', width: '12px', height: '12px' }} />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </div>
-        </div>
-        <div style={{ marginTop: '20px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <button className="primary-button" onClick={p.onGenerate} disabled={p.loading} style={{ opacity: p.loading ? 0.65 : 1 }}>
-            {p.loading ? <><Activity size={14} />GENERATING…</> : <><Sparkles size={14} />GENERATE DATASET</>}
-          </button>
-          {p.error && <span style={{ fontSize: '9px', color: 'var(--red)', fontFamily: 'var(--font-mono)', letterSpacing: '.05em' }}>{p.error}</span>}
-        </div>
-      </div>
-      <div style={{ padding: '24px 28px' }}>
-        {p.result ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '14px', color: 'var(--cyan)', letterSpacing: '.05em' }}>{p.result.human_id}</span>
-              <span style={{ border: '1px solid #245441', color: 'var(--green)', padding: '3px 7px', fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '.08em' }}>COMPLETED</span>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-              {([
-                ['SAMPLES', p.result.sample_count.toLocaleString()],
-                ['WINDOWS', p.result.window_count.toLocaleString()],
-                ['FAULTS', String(p.result.fault_count)],
-                ['SIGNAL', p.result.signal_type.toUpperCase()],
-                ['DURATION', `${p.result.duration}s`],
-                ['RATE', `${p.result.sampling_rate} Hz`],
-              ] as [string, string][]).map(([label, val]) => (
-                <div key={label} style={{ padding: '8px 10px', background: '#090e16', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: '8px', letterSpacing: '.12em', color: '#6d7e90' }}>{label}</div>
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', marginTop: '4px' }}>{val}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
-              {Object.entries(p.result.split_counts).map(([k, v]) => (
-                <div key={k} style={{ textAlign: 'center', padding: '6px 4px', background: '#090e16', border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: '7px', letterSpacing: '.08em', color: '#6d7e90' }}>{k.replace('_', ' ').toUpperCase()}</div>
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--cyan)', marginTop: '3px' }}>{v}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ fontSize: '9px', letterSpacing: '.08em', color: p.result.validation?.valid ? 'var(--green)' : 'var(--red)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <Check size={11} />
-              {p.result.validation?.valid ? 'VALIDATION PASSED' : `VALIDATION ISSUES (${p.result.validation?.issue_count ?? '?'})`}
-            </div>
-            {p.result.fault_annotations.length > 0 && (
-              <div>
-                <div style={{ fontSize: '8px', letterSpacing: '.12em', color: '#6d7e90', marginBottom: '6px' }}>FAULT ANNOTATIONS</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '80px', overflowY: 'auto' }}>
-                  {p.result.fault_annotations.map(a => (
-                    <div key={a.fault_id} style={{ display: 'flex', gap: '8px', fontSize: '9px', fontFamily: 'var(--font-mono)', color: 'var(--amber)', letterSpacing: '.04em' }}>
-                      <span style={{ color: '#6d7e90' }}>{a.fault_id}</span>
-                      <span>{a.fault_type}</span>
-                      <span style={{ color: '#6d7e90' }}>[{a.start_index}..{a.end_index}]</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '14px', color: '#405060', textAlign: 'center' }}>
-            <Database size={28} strokeWidth={1} />
-            <div>
-              <div style={{ fontSize: '10px', letterSpacing: '.12em', marginBottom: '6px' }}>AWAITING GENERATION</div>
-              <div style={{ fontSize: '9px', letterSpacing: '.08em', color: '#354454', lineHeight: 1.6 }}>Configure signal parameters and inject faults, then generate a deterministic synthetic dataset.</div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Adapter Lab — TRAIN stage panel
-// ---------------------------------------------------------------------------
-
-interface AdapterLabProps {
+export interface WorkflowState {
   datasetId: string | null
+<<<<<<< Updated upstream
   datasetHumanId: string | null
 }
 
@@ -535,3 +350,143 @@ function App() {
 }
 
 export default App
+=======
+  dataset: DatasetResponse | null
+  experimentId: string | null
+  modelId: string | null
+  evaluationId: string | null
+  evaluation: EvaluationResponse | null
+  quantizationId: string | null
+  quantization: QuantizationResponse | null
+  benchmarkId: string | null
+  benchmark: BenchmarkResponse | null
+}
+
+export default function App() {
+  const [stage, setStage] = useState<Stage>('OVERVIEW')
+  const [state, setState] = useState<WorkflowState>({
+    datasetId: null,
+    dataset: null,
+    experimentId: null,
+    modelId: null,
+    evaluationId: null,
+    evaluation: null,
+    quantizationId: null,
+    quantization: null,
+    benchmarkId: null,
+    benchmark: null,
+  })
+
+  const onDatasetReady = useCallback((ds: DatasetResponse) => {
+    setState(s => ({ ...s, datasetId: ds.dataset_id, dataset: ds }))
+  }, [])
+
+  const onTrainComplete = useCallback((experimentId: string, modelId: string) => {
+    setState(s => ({ ...s, experimentId, modelId }))
+  }, [])
+
+  const onEvalComplete = useCallback((evaluationId: string, evaluation: EvaluationResponse) => {
+    setState(s => ({ ...s, evaluationId, evaluation }))
+  }, [])
+
+  const onQuantizationReady = useCallback((quantizationId: string, quantization: QuantizationResponse) => {
+    setState(s => ({ ...s, quantizationId, quantization }))
+  }, [])
+
+  const onBenchmarkComplete = useCallback((benchmarkId: string, benchmark: BenchmarkResponse) => {
+    setState(s => ({ ...s, benchmarkId, benchmark }))
+  }, [])
+
+  function renderStage() {
+    switch (stage) {
+      case 'OVERVIEW':
+        return <Overview state={state} onNavigate={setStage} />
+      case 'DATA':
+        return <DataStudio onDatasetReady={onDatasetReady} existingDataset={state.dataset} />
+      case 'TRAIN':
+        return (
+          <TrainLab
+            datasetId={state.datasetId!}
+            dataset={state.dataset}
+            onTrainComplete={onTrainComplete}
+            existingExperimentId={state.experimentId}
+          />
+        )
+      case 'EVALUATE':
+        return (
+          <EvalLab
+            experimentId={state.experimentId!}
+            modelId={state.modelId}
+            onEvalComplete={onEvalComplete}
+            existingEvaluationId={state.evaluationId}
+            existingEvaluation={state.evaluation}
+          />
+        )
+      case 'OPTIMIZE':
+        return (
+          <QuantizeLab
+            modelId={state.modelId!}
+            datasetId={state.datasetId}
+            onQuantizationReady={onQuantizationReady}
+            existingQuantizationId={state.quantizationId}
+            existingQuantization={state.quantization}
+          />
+        )
+      case 'RUNTIME':
+        return (
+          <RuntimeConsole
+            modelId={state.modelId}
+            quantizationId={state.quantizationId}
+            dataset={state.dataset}
+          />
+        )
+      case 'BENCHMARK':
+        return (
+          <BenchmarkLab
+            modelId={state.modelId}
+            quantizationId={state.quantizationId}
+            onBenchmarkComplete={onBenchmarkComplete}
+            existingBenchmarkId={state.benchmarkId}
+            existingBenchmark={state.benchmark}
+          />
+        )
+    }
+  }
+
+  return (
+    <div className="sq-shell">
+      <header className="sq-topbar">
+        <div className="sq-brand">
+          <span className="sq-wordmark">
+            SYNTH<em>QUANTA</em>
+          </span>
+          <span className="sq-brand-pipe" />
+          <span className="sq-brand-sub">MODEL ENGINEERING CONSOLE</span>
+        </div>
+        <div className="sq-topbar-right">
+          {state.datasetId && (
+            <span className="sq-model-chip">{state.dataset?.human_id ?? state.datasetId.slice(0, 8)}</span>
+          )}
+          {state.modelId && (
+            <span className="sq-model-chip">EXP active</span>
+          )}
+          <div className="sq-sys-status">
+            <span className="sq-pulse" />
+            SYSTEM READY
+          </div>
+        </div>
+      </header>
+
+      <main className="sq-workspace">
+        <div className="sq-workspace-scroll">
+          <div key={stage} className="sq-stage-anim">
+            {renderStage()}
+          </div>
+        </div>
+      </main>
+
+      <WorkflowNav stage={stage} state={state} onNavigate={setStage} />
+    </div>
+  )
+}
+>>>>>>> Stashed changes
