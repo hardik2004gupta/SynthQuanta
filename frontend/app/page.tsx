@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowUpRight, BarChart3, Check, ChevronRight, CircleDot, Cpu, Database, Gauge, GitBranch, Hexagon, Keyboard, Layers3, Menu, Play, Radio, Search, Server, Settings2, Sparkles, Terminal, Zap } from 'lucide-react'
-import { api, type DatasetResponse, type EvaluationResponse, type ExperimentResponse, type ShiftScenario } from '../lib/api'
+import { api, type ComparisonMetrics, type DatasetResponse, type EvaluationResponse, type ExperimentResponse, type QuantizationResponse, type ShiftScenario } from '../lib/api'
 
 const stages = [
   { id: 'data', num: '01', label: 'DATA', sub: 'SIGNAL STUDIO', icon: Database },
@@ -217,6 +217,7 @@ interface AdapterLabProps {
   datasetId: string | null
   datasetHumanId: string | null
   onExperimentCreated?: (experimentId: string, humanId: string) => void
+  onModelReady?: (modelId: string) => void
 }
 
 function LossChart({ history }: { history: { epoch: number; train_loss: number; val_loss: number }[] }) {
@@ -245,7 +246,7 @@ function LossChart({ history }: { history: { epoch: number; train_loss: number; 
   )
 }
 
-function AdapterLab({ datasetId, datasetHumanId, onExperimentCreated }: AdapterLabProps) {
+function AdapterLab({ datasetId, datasetHumanId, onExperimentCreated, onModelReady }: AdapterLabProps) {
   const [method, setMethod] = useState<'full' | 'lora' | 'qlora'>('lora')
   const [epochs, setEpochs] = useState(3)
   const [batchSize, setBatchSize] = useState(16)
@@ -269,7 +270,10 @@ function AdapterLab({ datasetId, datasetHumanId, onExperimentCreated }: AdapterL
       try {
         const exp = await api.training.get(expId)
         setExperiment(exp)
-        if (exp.status === 'COMPLETED' || exp.status === 'FAILED') stopPolling()
+        if (exp.status === 'COMPLETED' || exp.status === 'FAILED') {
+          stopPolling()
+          if (exp.status === 'COMPLETED' && exp.model_id) onModelReady?.(exp.model_id)
+        }
       } catch { /* keep polling */ }
     }, 2000)
   }, [])
@@ -603,6 +607,232 @@ function RobustnessLab({ experimentId, experimentHumanId }: RobustnessLabProps) 
 }
 
 // ---------------------------------------------------------------------------
+// QuantizationLab — OPTIMIZE stage
+// ---------------------------------------------------------------------------
+
+interface QuantizationLabProps {
+  modelId: string | null
+  datasetId: string | null
+}
+
+function QuantizationLab({ modelId, datasetId }: QuantizationLabProps) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [quant, setQuant] = useState<QuantizationResponse | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = () => {
+    if (pollRef.current !== null) { clearInterval(pollRef.current); pollRef.current = null }
+  }
+
+  useEffect(() => () => stopPolling(), [])
+
+  const startPolling = useCallback((quantId: string) => {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      try {
+        const q = await api.quantization.get(quantId)
+        setQuant(q)
+        if (q.status === 'COMPLETED' || q.status === 'FAILED') stopPolling()
+      } catch { /* keep polling */ }
+    }, 2000)
+  }, [])
+
+  const startQuantization = useCallback(async () => {
+    if (!modelId) { setError('Train a model first (TRAIN stage).'); return }
+    setLoading(true); setError(null)
+    try {
+      const resp = await api.quantization.run({
+        source_model_id: modelId,
+        dataset_id: datasetId ?? undefined,
+        benchmark_iterations: 50,
+        benchmark_warmup: 10,
+      })
+      const initial: QuantizationResponse = {
+        quantization_id: resp.quantization_id,
+        human_id: resp.human_id,
+        source_model_id: resp.source_model_id,
+        quantized_model_id: null,
+        dataset_id: datasetId ?? null,
+        status: resp.status,
+        method: 'dynamic_int8',
+        backend: null,
+        comparison: null,
+        artifact_path: null,
+        duration_seconds: null,
+        error: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+      setQuant(initial)
+      startPolling(resp.quantization_id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Quantization failed to start')
+    } finally {
+      setLoading(false)
+    }
+  }, [modelId, datasetId, startPolling])
+
+  const isRunning = quant?.status === 'PENDING' || quant?.status === 'RUNNING'
+  const statusColor = quant?.status === 'COMPLETED' ? 'var(--green)' : quant?.status === 'FAILED' ? 'var(--red)' : quant?.status === 'RUNNING' ? 'var(--cyan)' : '#6d7e90'
+  const cmp: ComparisonMetrics | null = quant?.comparison ?? null
+
+  const sizeReduction = cmp ? ((1 - 1 / cmp.size_reduction_ratio) * 100).toFixed(0) : null
+  const f1DeltaPct = cmp ? (cmp.f1_delta * 100).toFixed(1) : null
+  const latencySpeedup = cmp ? cmp.latency_speedup.toFixed(2) : null
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: '340px' }}>
+      {/* Left: config + status */}
+      <div style={{ padding: '24px 28px', borderRight: '1px solid var(--border)' }}>
+        {modelId ? (
+          <div style={{ fontSize: '9px', letterSpacing: '.08em', color: 'var(--cyan)', marginBottom: '14px', fontFamily: 'var(--font-mono)' }}>
+            FP32 MODEL: {modelId.slice(0, 8)}…
+          </div>
+        ) : (
+          <div style={{ fontSize: '9px', letterSpacing: '.08em', color: 'var(--amber)', marginBottom: '14px' }}>
+            No trained model — go to TRAIN stage first.
+          </div>
+        )}
+        <div style={{ marginBottom: '16px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            className="primary-button"
+            onClick={startQuantization}
+            disabled={loading || isRunning || !modelId}
+            style={{ opacity: (loading || isRunning || !modelId) ? 0.65 : 1 }}
+          >
+            {loading ? <><Activity size={14} />STARTING…</> : isRunning ? <><Activity size={14} />QUANTIZING…</> : <><Zap size={14} />QUANTIZE TO INT8</>}
+          </button>
+          {error && <span style={{ fontSize: '9px', color: 'var(--red)', fontFamily: 'var(--font-mono)', letterSpacing: '.05em' }}>{error}</span>}
+        </div>
+        {quant && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--violet)', letterSpacing: '.05em' }}>{quant.human_id}</span>
+              <span style={{ border: `1px solid ${statusColor}22`, color: statusColor, padding: '3px 7px', fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '.08em' }}>
+                {quant.status}
+              </span>
+              {isRunning && <Activity size={12} style={{ color: 'var(--cyan)', animation: 'spin 1s linear infinite' }} />}
+            </div>
+            {quant.backend && (
+              <div style={{ fontSize: '8px', color: '#6d7e90', fontFamily: 'var(--font-mono)', letterSpacing: '.08em' }}>
+                BACKEND: {quant.backend.toUpperCase()} · METHOD: DYNAMIC INT8
+              </div>
+            )}
+            {quant.status === 'FAILED' && quant.error && (
+              <div style={{ fontSize: '9px', color: 'var(--red)', fontFamily: 'var(--font-mono)', padding: '8px', background: '#160a0a', border: '1px solid #4a1515', letterSpacing: '.04em', lineHeight: 1.5 }}>
+                ERROR: {quant.error}
+              </div>
+            )}
+            {quant.quantized_model_id && (
+              <div style={{ padding: '8px 10px', background: '#090e16', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: '8px', letterSpacing: '.1em', color: '#6d7e90', marginBottom: '4px' }}>INT8 ARTIFACT</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--green)' }}>{quant.quantized_model_id.slice(0, 8)}…</div>
+              </div>
+            )}
+          </div>
+        )}
+        {!quant && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '12px', color: '#405060', textAlign: 'center' }}>
+            <Zap size={28} strokeWidth={1} />
+            <div>
+              <div style={{ fontSize: '10px', letterSpacing: '.12em', marginBottom: '6px' }}>QUANTIZATION LAB READY</div>
+              <div style={{ fontSize: '9px', letterSpacing: '.08em', color: '#354454', lineHeight: 1.6 }}>FP32 → INT8 via PyTorch dynamic quantization.<br />Compares F1, model size, and latency.</div>
+            </div>
+          </div>
+        )}
+      </div>
+      {/* Right: FP32 vs INT8 comparison */}
+      <div style={{ padding: '24px 28px', overflowY: 'auto' }}>
+        <div style={{ fontSize: '8px', letterSpacing: '.12em', color: '#6d7e90', marginBottom: '12px' }}>FP32 vs INT8 COMPARISON</div>
+        {cmp ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {/* Quality */}
+            <div style={{ padding: '10px 12px', background: '#090e16', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '7px', letterSpacing: '.12em', color: '#6d7e90', marginBottom: '8px' }}>CLASSIFICATION QUALITY</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                <div>
+                  <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>FP32 F1</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--cyan)' }}>{(cmp.fp32_macro_f1 * 100).toFixed(1)}%</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>INT8 F1</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--green)' }}>{(cmp.int8_macro_f1 * 100).toFixed(1)}%</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>F1 DELTA</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: cmp.f1_delta > 0.02 ? 'var(--red)' : cmp.f1_delta < -0.005 ? 'var(--green)' : 'var(--amber)' }}>
+                    {cmp.f1_delta > 0 ? '-' : '+'}{Math.abs(cmp.f1_delta * 100).toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+            </div>
+            {/* Size */}
+            <div style={{ padding: '10px 12px', background: '#090e16', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '7px', letterSpacing: '.12em', color: '#6d7e90', marginBottom: '8px' }}>MODEL SIZE</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                <div>
+                  <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>FP32</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px' }}>{(cmp.fp32_size_bytes / 1024).toFixed(0)} KB</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>INT8</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px' }}>{(cmp.int8_size_bytes / 1024).toFixed(0)} KB</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>REDUCTION</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--violet)' }}>{sizeReduction}%</div>
+                </div>
+              </div>
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ height: '4px', background: '#1a2535', borderRadius: '2px', overflow: 'hidden', display: 'flex', gap: '2px' }}>
+                  <div style={{ width: '100%', background: 'var(--cyan)', opacity: 0.4 }} />
+                </div>
+                <div style={{ height: '4px', background: '#1a2535', borderRadius: '2px', overflow: 'hidden', marginTop: '3px', display: 'flex' }}>
+                  <div style={{ width: `${100 / cmp.size_reduction_ratio}%`, background: 'var(--violet)' }} />
+                </div>
+                <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>
+                  <span style={{ fontSize: '7px', color: 'var(--cyan)', opacity: 0.7 }}>━ FP32</span>
+                  <span style={{ fontSize: '7px', color: 'var(--violet)' }}>━ INT8</span>
+                </div>
+              </div>
+            </div>
+            {/* Latency */}
+            <div style={{ padding: '10px 12px', background: '#090e16', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '7px', letterSpacing: '.12em', color: '#6d7e90', marginBottom: '8px' }}>INFERENCE LATENCY (SINGLE WINDOW)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                <div>
+                  <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>FP32</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px' }}>{cmp.fp32_latency_ms.toFixed(2)} ms</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>INT8</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px' }}>{cmp.int8_latency_ms.toFixed(2)} ms</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>SPEEDUP</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--green)' }}>{latencySpeedup}×</div>
+                </div>
+              </div>
+            </div>
+            <div style={{ fontSize: '8px', color: '#405060', letterSpacing: '.06em', lineHeight: 1.5 }}>
+              {cmp.n_test_windows} test windows · {quant?.duration_seconds?.toFixed(1) ?? '—'}s total
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '240px', gap: '10px', color: '#354454', textAlign: 'center' }}>
+            <div style={{ fontSize: '9px', letterSpacing: '.08em', lineHeight: 1.7 }}>
+              Comparison metrics appear after quantization completes:<br />
+              F1 delta · Size reduction · Latency speedup
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -628,9 +858,11 @@ function App() {
   const [dsResult, setDsResult] = useState<DatasetResponse | null>(null)
   const [dsError, setDsError] = useState<string | null>(null)
 
-  // Latest experiment created in TRAIN stage — passed to EVALUATE stage
+  // Latest experiment created in TRAIN stage — passed to EVALUATE + OPTIMIZE stages
   const [trainedExpId, setTrainedExpId] = useState<string | null>(null)
   const [trainedExpHumanId, setTrainedExpHumanId] = useState<string | null>(null)
+  // FP32 model_id set when experiment completes — passed to OPTIMIZE stage
+  const [trainedModelId, setTrainedModelId] = useState<string | null>(null)
 
   const generateDataset = useCallback(async () => {
     setDsLoading(true)
@@ -712,6 +944,7 @@ function App() {
             datasetId={dsResult?.dataset_id ?? null}
             datasetHumanId={dsResult?.human_id ?? null}
             onExperimentCreated={(id, hid) => { setTrainedExpId(id); setTrainedExpHumanId(hid) }}
+            onModelReady={(mid) => setTrainedModelId(mid)}
           />
         </Panel>
       ) : active === 'evaluate' ? (
@@ -719,6 +952,13 @@ function App() {
           <RobustnessLab
             experimentId={trainedExpId}
             experimentHumanId={trainedExpHumanId}
+          />
+        </Panel>
+      ) : active === 'optimize' ? (
+        <Panel title="QUANTIZATION LAB" eyebrow="FP32 → INT8 DYNAMIC QUANTIZATION" className="focused-panel">
+          <QuantizationLab
+            modelId={trainedModelId}
+            datasetId={dsResult?.dataset_id ?? null}
           />
         </Panel>
       ) : active !== 'overview' ? (

@@ -256,6 +256,55 @@ export interface EvaluationResponse {
   created_at: string
 }
 
+// ---------------------------------------------------------------------------
+// Quantization types
+// ---------------------------------------------------------------------------
+
+export interface QuantizationRunRequest {
+  source_model_id: string
+  dataset_id?: string | null
+  benchmark_iterations?: number
+  benchmark_warmup?: number
+}
+
+export interface QuantizationStartResponse {
+  quantization_id: string
+  human_id: string
+  source_model_id: string
+  status: string
+  message: string
+}
+
+export interface ComparisonMetrics {
+  fp32_macro_f1: number
+  int8_macro_f1: number
+  f1_delta: number
+  fp32_size_bytes: number
+  int8_size_bytes: number
+  size_reduction_ratio: number
+  fp32_latency_ms: number
+  int8_latency_ms: number
+  latency_speedup: number
+  n_test_windows: number
+}
+
+export interface QuantizationResponse {
+  quantization_id: string
+  human_id: string
+  source_model_id: string
+  quantized_model_id: string | null
+  dataset_id: string | null
+  status: string
+  method: string
+  backend: string | null
+  comparison: ComparisonMetrics | null
+  artifact_path: string | null
+  duration_seconds: number | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
 export const api = {
   datasets: {
     generate: (req: DatasetGenerateRequest) =>
@@ -291,5 +340,19 @@ export const api = {
 
     get: (evaluationId: string) =>
       request<EvaluationResponse>(`/evaluation/${evaluationId}`),
+  },
+
+  quantization: {
+    run: (req: QuantizationRunRequest) =>
+      request<QuantizationStartResponse>('/quantization/run', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+
+    get: (quantizationId: string) =>
+      request<QuantizationResponse>(`/quantization/${quantizationId}`),
+
+    list: (limit = 50, offset = 0) =>
+      request<QuantizationResponse[]>(`/quantization?limit=${limit}&offset=${offset}`),
   },
 }
