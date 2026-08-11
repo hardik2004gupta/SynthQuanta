@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowUpRight, BarChart3, Check, ChevronRight, CircleDot, Cpu, Database, Gauge, GitBranch, Hexagon, Keyboard, Layers3, Menu, Play, Radio, Search, Server, Settings2, Sparkles, Terminal, Zap } from 'lucide-react'
-import { api, type DatasetResponse, type ExperimentResponse } from '../lib/api'
+import { api, type DatasetResponse, type EvaluationResponse, type ExperimentResponse, type ShiftScenario } from '../lib/api'
 
 const stages = [
   { id: 'data', num: '01', label: 'DATA', sub: 'SIGNAL STUDIO', icon: Database },
@@ -216,6 +216,7 @@ function SignalStudio(p: StudioProps) {
 interface AdapterLabProps {
   datasetId: string | null
   datasetHumanId: string | null
+  onExperimentCreated?: (experimentId: string, humanId: string) => void
 }
 
 function LossChart({ history }: { history: { epoch: number; train_loss: number; val_loss: number }[] }) {
@@ -244,7 +245,7 @@ function LossChart({ history }: { history: { epoch: number; train_loss: number; 
   )
 }
 
-function AdapterLab({ datasetId, datasetHumanId }: AdapterLabProps) {
+function AdapterLab({ datasetId, datasetHumanId, onExperimentCreated }: AdapterLabProps) {
   const [method, setMethod] = useState<'full' | 'lora' | 'qlora'>('lora')
   const [epochs, setEpochs] = useState(3)
   const [batchSize, setBatchSize] = useState(16)
@@ -298,6 +299,7 @@ function AdapterLab({ datasetId, datasetHumanId }: AdapterLabProps) {
       }
       setExperiment(initial)
       startPolling(resp.experiment_id)
+      onExperimentCreated?.(resp.experiment_id, resp.human_id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Training failed to start')
     } finally {
@@ -417,6 +419,190 @@ function AdapterLab({ datasetId, datasetHumanId }: AdapterLabProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Robustness Lab — EVALUATE stage panel
+// ---------------------------------------------------------------------------
+
+const SHIFT_LABELS: Record<string, string> = {
+  noise_shift: 'NOISE SHIFT',
+  amplitude_shift: 'AMPLITUDE SHIFT',
+  frequency_shift: 'FREQUENCY SHIFT',
+  severity_shift: 'SEVERITY SHIFT',
+  compound_shift: 'COMPOUND SHIFT',
+}
+
+interface RobustnessLabProps {
+  experimentId: string | null
+  experimentHumanId: string | null
+}
+
+function RobustnessLab({ experimentId, experimentHumanId }: RobustnessLabProps) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [evaluation, setEvaluation] = useState<EvaluationResponse | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = () => {
+    if (pollRef.current !== null) { clearInterval(pollRef.current); pollRef.current = null }
+  }
+
+  useEffect(() => () => stopPolling(), [])
+
+  const startPolling = useCallback((evalId: string) => {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      try {
+        const ev = await api.evaluation.get(evalId)
+        setEvaluation(ev)
+        if (ev.status === 'COMPLETED' || ev.status === 'FAILED') stopPolling()
+      } catch { /* keep polling */ }
+    }, 2000)
+  }, [])
+
+  const startEvaluation = useCallback(async () => {
+    if (!experimentId) { setError('Train a model first (TRAIN stage).'); return }
+    setLoading(true); setError(null)
+    try {
+      const resp = await api.evaluation.run({ experiment_id: experimentId, include_shift: true })
+      const initial: EvaluationResponse = {
+        evaluation_id: resp.evaluation_id,
+        human_id: resp.human_id,
+        experiment_id: resp.experiment_id,
+        model_id: null, dataset_id: '',
+        status: resp.status,
+        evaluation_type: 'iid+shift',
+        metrics: null, results: null,
+        duration_seconds: null, hardware_info: null, artifact_path: null,
+        created_at: new Date().toISOString(),
+      }
+      setEvaluation(initial)
+      startPolling(resp.evaluation_id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Evaluation failed to start')
+    } finally {
+      setLoading(false)
+    }
+  }, [experimentId, startPolling])
+
+  const isRunning = evaluation?.status === 'PENDING' || evaluation?.status === 'RUNNING'
+  const statusColor = evaluation?.status === 'COMPLETED' ? 'var(--green)' : evaluation?.status === 'FAILED' ? 'var(--red)' : evaluation?.status === 'RUNNING' ? 'var(--cyan)' : '#6d7e90'
+  const iidMetrics = evaluation?.results?.iid?.metrics
+  const iidLocalization = evaluation?.results?.iid?.localization
+  const shiftScenarios: ShiftScenario[] = (evaluation?.results?.distribution_shift ?? []) as ShiftScenario[]
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: '340px' }}>
+      {/* Left: IID metrics */}
+      <div style={{ padding: '24px 28px', borderRight: '1px solid var(--border)' }}>
+        {experimentId ? (
+          <div style={{ fontSize: '9px', letterSpacing: '.08em', color: 'var(--violet)', marginBottom: '14px', fontFamily: 'var(--font-mono)' }}>
+            EXPERIMENT: {experimentHumanId ?? experimentId}
+          </div>
+        ) : (
+          <div style={{ fontSize: '9px', letterSpacing: '.08em', color: 'var(--amber)', marginBottom: '14px' }}>
+            No trained model — go to TRAIN stage first.
+          </div>
+        )}
+        <div style={{ marginBottom: '16px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            className="primary-button"
+            onClick={startEvaluation}
+            disabled={loading || isRunning || !experimentId}
+            style={{ opacity: (loading || isRunning || !experimentId) ? 0.65 : 1 }}
+          >
+            {loading ? <><Activity size={14} />STARTING…</> : isRunning ? <><Activity size={14} />EVALUATING…</> : <><BarChart3 size={14} />RUN EVALUATION</>}
+          </button>
+          {error && <span style={{ fontSize: '9px', color: 'var(--red)', fontFamily: 'var(--font-mono)', letterSpacing: '.05em' }}>{error}</span>}
+        </div>
+        {evaluation && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--amber)', letterSpacing: '.05em' }}>{evaluation.human_id}</span>
+              <span style={{ border: `1px solid ${statusColor}22`, color: statusColor, padding: '3px 7px', fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '.08em' }}>
+                {evaluation.status}
+              </span>
+              {isRunning && <Activity size={12} style={{ color: 'var(--cyan)', animation: 'spin 1s linear infinite' }} />}
+            </div>
+            {iidMetrics && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                {([
+                  ['MACRO F1', (iidMetrics.macro_f1 * 100).toFixed(1) + '%'],
+                  ['WEIGHTED F1', (iidMetrics.weighted_f1 * 100).toFixed(1) + '%'],
+                  ['FALSE ALARM RATE', (iidMetrics.false_alarm_rate * 100).toFixed(1) + '%'],
+                  iidLocalization ? ['MEAN IoU', iidLocalization.mean_iou.toFixed(3)] : null,
+                  iidLocalization ? ['IoU@0.5', (iidLocalization.iou_at_50 * 100).toFixed(0) + '%'] : null,
+                  evaluation.duration_seconds != null ? ['EVAL TIME', `${evaluation.duration_seconds.toFixed(1)}s`] : null,
+                ] as ([string, string] | null)[]).filter(Boolean).map(item => {
+                  const [label, val] = item!
+                  return (
+                    <div key={label} style={{ padding: '8px 10px', background: '#090e16', border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: '8px', letterSpacing: '.12em', color: '#6d7e90' }}>{label}</div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', marginTop: '4px', color: label === 'FALSE ALARM RATE' ? 'var(--amber)' : 'inherit' }}>{val}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {evaluation.status === 'FAILED' && !!evaluation.metrics?.error && (
+              <div style={{ fontSize: '9px', color: 'var(--red)', fontFamily: 'var(--font-mono)', padding: '8px', background: '#160a0a', border: '1px solid #4a1515', letterSpacing: '.04em', lineHeight: 1.5 }}>
+                ERROR: {String(evaluation.metrics?.error ?? '')}
+              </div>
+            )}
+          </div>
+        )}
+        {!evaluation && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '12px', color: '#405060', textAlign: 'center' }}>
+            <BarChart3 size={28} strokeWidth={1} />
+            <div>
+              <div style={{ fontSize: '10px', letterSpacing: '.12em', marginBottom: '6px' }}>ROBUSTNESS LAB READY</div>
+              <div style={{ fontSize: '9px', letterSpacing: '.08em', color: '#354454', lineHeight: 1.6 }}>IID evaluation + 5 distribution-shift scenarios on the trained model.</div>
+            </div>
+          </div>
+        )}
+      </div>
+      {/* Right: shift scenario table */}
+      <div style={{ padding: '24px 28px', overflowY: 'auto' }}>
+        <div style={{ fontSize: '8px', letterSpacing: '.12em', color: '#6d7e90', marginBottom: '12px' }}>DISTRIBUTION SHIFT SCENARIOS</div>
+        {shiftScenarios.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {shiftScenarios.map((s) => (
+              <div key={s.scenario} style={{ padding: '10px 12px', background: '#090e16', border: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr auto auto auto', alignItems: 'center', gap: '8px' }}>
+                <div>
+                  <div style={{ fontSize: '8px', letterSpacing: '.1em', color: '#6d7e90' }}>{SHIFT_LABELS[s.scenario] ?? s.scenario}</div>
+                  {s.error && <div style={{ fontSize: '8px', color: 'var(--red)', marginTop: '2px' }}>FAILED</div>}
+                </div>
+                {!s.error && (
+                  <>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>IID F1</div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--green)' }}>{(s.iid_macro_f1 * 100).toFixed(1)}%</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>SHIFTED F1</div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: s.shifted_macro_f1 < s.iid_macro_f1 * 0.85 ? 'var(--red)' : 'var(--amber)' }}>{(s.shifted_macro_f1 * 100).toFixed(1)}%</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>ROBUSTNESS</div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: s.robustness_ratio >= 0.9 ? 'var(--green)' : s.robustness_ratio >= 0.7 ? 'var(--amber)' : 'var(--red)' }}>{(s.robustness_ratio * 100).toFixed(0)}%</div>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '10px', color: '#354454', textAlign: 'center' }}>
+            <div style={{ fontSize: '9px', letterSpacing: '.08em', lineHeight: 1.7 }}>
+              Five scenarios will run automatically with evaluation:<br />
+              Noise · Amplitude · Frequency · Severity · Compound
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -441,6 +627,10 @@ function App() {
   const [dsLoading, setDsLoading] = useState(false)
   const [dsResult, setDsResult] = useState<DatasetResponse | null>(null)
   const [dsError, setDsError] = useState<string | null>(null)
+
+  // Latest experiment created in TRAIN stage — passed to EVALUATE stage
+  const [trainedExpId, setTrainedExpId] = useState<string | null>(null)
+  const [trainedExpHumanId, setTrainedExpHumanId] = useState<string | null>(null)
 
   const generateDataset = useCallback(async () => {
     setDsLoading(true)
@@ -521,6 +711,14 @@ function App() {
           <AdapterLab
             datasetId={dsResult?.dataset_id ?? null}
             datasetHumanId={dsResult?.human_id ?? null}
+            onExperimentCreated={(id, hid) => { setTrainedExpId(id); setTrainedExpHumanId(hid) }}
+          />
+        </Panel>
+      ) : active === 'evaluate' ? (
+        <Panel title="ROBUSTNESS LAB" eyebrow="IID + DISTRIBUTION SHIFT EVALUATION" className="focused-panel">
+          <RobustnessLab
+            experimentId={trainedExpId}
+            experimentHumanId={trainedExpHumanId}
           />
         </Panel>
       ) : active !== 'overview' ? (

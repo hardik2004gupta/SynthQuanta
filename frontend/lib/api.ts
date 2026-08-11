@@ -196,6 +196,66 @@ export interface ExperimentResponse {
   model_human_id: string | null
 }
 
+// ---------------------------------------------------------------------------
+// Evaluation types
+// ---------------------------------------------------------------------------
+
+export interface EvaluationRunRequest {
+  experiment_id: string
+  batch_size?: number
+  include_shift?: boolean
+}
+
+export interface EvaluationStartResponse {
+  evaluation_id: string
+  human_id: string
+  experiment_id: string
+  status: string
+  message: string
+}
+
+export interface ShiftScenario {
+  scenario: string
+  iid_macro_f1: number
+  shifted_macro_f1: number
+  absolute_degradation: number
+  relative_degradation: number
+  robustness_ratio: number
+  n_shifted_windows: number
+  seed: number
+  error?: string | null
+}
+
+export interface EvaluationResponse {
+  evaluation_id: string
+  human_id: string
+  experiment_id: string
+  model_id: string | null
+  dataset_id: string
+  status: string
+  evaluation_type: string
+  metrics: Record<string, unknown> | null
+  results: {
+    iid?: {
+      metrics?: {
+        macro_f1: number
+        weighted_f1: number
+        false_alarm_rate: number
+        n_samples: number
+        per_class?: Record<string, { precision: number; recall: number; f1: number; support: number }>
+      }
+      localization?: { mean_iou: number; iou_at_50: number; n_gt_intervals: number }
+      n_windows: number
+      duration_seconds: number
+    }
+    distribution_shift?: ShiftScenario[]
+  } | null
+  duration_seconds: number | null
+  hardware_info: Record<string, unknown> | null
+  artifact_path: string | null
+  created_at: string
+}
+
 export const api = {
   datasets: {
     generate: (req: DatasetGenerateRequest) =>
@@ -220,5 +280,16 @@ export const api = {
 
     get: (experimentId: string) =>
       request<ExperimentResponse>(`/training/${experimentId}`),
+  },
+
+  evaluation: {
+    run: (req: EvaluationRunRequest) =>
+      request<EvaluationStartResponse>('/evaluation/run', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+
+    get: (evaluationId: string) =>
+      request<EvaluationResponse>(`/evaluation/${evaluationId}`),
   },
 }
