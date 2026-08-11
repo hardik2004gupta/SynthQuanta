@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+*.env.local
+
+# Alembic
+alembic/versions/*.pyc
+
+# Artifacts — never commit generated data or model weights
+artifacts/datasets/
+artifacts/models/
+artifacts/experiments/
+artifacts/benchmarks/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js (frontend)
+node_modules/
+.next/
+out/
+.pnpm-store/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+
+# Secrets
+*.pem
+*.key
+secrets/
