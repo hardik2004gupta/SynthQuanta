@@ -305,6 +305,114 @@ export interface QuantizationResponse {
   updated_at: string
 }
 
+// ---------------------------------------------------------------------------
+// Runtime types
+// ---------------------------------------------------------------------------
+
+export interface RuntimeLoadRequest {
+  model_id?: string
+  quantization_id?: string
+}
+
+export interface RuntimeHealthResponse {
+  status: string
+  model_id: string | null
+  artifact_path: string | null
+  precision: string | null
+  runtime_variant: string | null
+  device: string
+  backend: string | null
+  loaded_at: string | null
+  request_count: number
+  error: string | null
+}
+
+export interface PredictRequest {
+  values: number[]
+}
+
+export interface PredictionResponse {
+  predicted_class: string
+  predicted_class_index: number
+  confidence: number
+  probabilities: Record<string, number>
+  latency_ms: number
+}
+
+export interface BatchPredictRequest {
+  windows: number[][]
+}
+
+export interface BatchPredictionResponse {
+  predictions: PredictionResponse[]
+}
+
+export interface TelemetryResponse {
+  request_count: number
+  success_count: number
+  error_count: number
+  last_latency_ms: number | null
+  mean_latency_ms: number | null
+  p50_latency_ms: number | null
+  p95_latency_ms: number | null
+  p99_latency_ms: number | null
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark types
+// ---------------------------------------------------------------------------
+
+export interface BenchmarkRunRequest {
+  model_id?: string
+  quantization_id?: string
+  batch_sizes?: number[]
+  iterations?: number
+  warmup?: number
+  seed?: number
+}
+
+export interface BenchmarkStartResponse {
+  benchmark_id: string
+  human_id: string
+  model_id: string
+  runtime_variant: string
+  status: string
+  message: string
+}
+
+export interface BatchResult {
+  batch_size: number
+  iterations: number
+  warmup_count: number
+  latency_stats: Record<string, number>
+  throughput_rps: number
+  throughput_sps: number
+  memory_peak_mb: number | null
+  duration_seconds: number
+  status: string
+  error: string | null
+}
+
+export interface BenchmarkResponse {
+  benchmark_id: string
+  human_id: string
+  model_id: string | null
+  runtime_variant: string | null
+  device: string | null
+  status: string
+  iterations: number | null
+  warmup_count: number | null
+  batch_results: BatchResult[] | null
+  latency_metrics: Record<string, number> | null
+  throughput: number | null
+  memory: Record<string, number> | null
+  hardware_info: Record<string, unknown> | null
+  artifact_path: string | null
+  duration_seconds: number | null
+  error: string | null
+  created_at: string
+}
+
 export const api = {
   datasets: {
     generate: (req: DatasetGenerateRequest) =>
@@ -354,5 +462,45 @@ export const api = {
 
     list: (limit = 50, offset = 0) =>
       request<QuantizationResponse[]>(`/quantization?limit=${limit}&offset=${offset}`),
+  },
+
+  runtime: {
+    load: (req: RuntimeLoadRequest) =>
+      request<RuntimeHealthResponse>('/runtime/load', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+
+    health: () =>
+      request<RuntimeHealthResponse>('/runtime/health'),
+
+    predict: (req: PredictRequest) =>
+      request<PredictionResponse>('/runtime/predict', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+
+    predictBatch: (req: BatchPredictRequest) =>
+      request<BatchPredictionResponse>('/runtime/predict/batch', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+
+    telemetry: () =>
+      request<TelemetryResponse>('/runtime/telemetry'),
+  },
+
+  benchmarks: {
+    run: (req: BenchmarkRunRequest) =>
+      request<BenchmarkStartResponse>('/benchmarks/run', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+
+    get: (benchmarkId: string) =>
+      request<BenchmarkResponse>(`/benchmarks/${benchmarkId}`),
+
+    list: (limit = 50, offset = 0) =>
+      request<BenchmarkResponse[]>(`/benchmarks?limit=${limit}&offset=${offset}`),
   },
 }

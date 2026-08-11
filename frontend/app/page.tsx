@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowUpRight, BarChart3, Check, ChevronRight, CircleDot, Cpu, Database, Gauge, GitBranch, Hexagon, Keyboard, Layers3, Menu, Play, Radio, Search, Server, Settings2, Sparkles, Terminal, Zap } from 'lucide-react'
-import { api, type ComparisonMetrics, type DatasetResponse, type EvaluationResponse, type ExperimentResponse, type QuantizationResponse, type ShiftScenario } from '../lib/api'
+import { api, type BatchResult, type BenchmarkResponse, type ComparisonMetrics, type DatasetResponse, type EvaluationResponse, type ExperimentResponse, type PredictionResponse, type QuantizationResponse, type RuntimeHealthResponse, type ShiftScenario, type TelemetryResponse } from '../lib/api'
 
 const stages = [
   { id: 'data', num: '01', label: 'DATA', sub: 'SIGNAL STUDIO', icon: Database },
@@ -10,6 +10,7 @@ const stages = [
   { id: 'evaluate', num: '03', label: 'EVALUATE', sub: 'ROBUSTNESS LAB', icon: BarChart3 },
   { id: 'optimize', num: '04', label: 'OPTIMIZE', sub: 'QUANTIZATION LAB', icon: Zap },
   { id: 'runtime', num: '05', label: 'RUNTIME', sub: 'SERVE CONSOLE', icon: Server },
+  { id: 'benchmark', num: '06', label: 'BENCHMARK', sub: 'ARENA', icon: Gauge },
 ]
 
 const metrics = [
@@ -613,9 +614,10 @@ function RobustnessLab({ experimentId, experimentHumanId }: RobustnessLabProps) 
 interface QuantizationLabProps {
   modelId: string | null
   datasetId: string | null
+  onQuantizationReady?: (quantizationId: string) => void
 }
 
-function QuantizationLab({ modelId, datasetId }: QuantizationLabProps) {
+function QuantizationLab({ modelId, datasetId, onQuantizationReady }: QuantizationLabProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [quant, setQuant] = useState<QuantizationResponse | null>(null)
@@ -633,7 +635,10 @@ function QuantizationLab({ modelId, datasetId }: QuantizationLabProps) {
       try {
         const q = await api.quantization.get(quantId)
         setQuant(q)
-        if (q.status === 'COMPLETED' || q.status === 'FAILED') stopPolling()
+        if (q.status === 'COMPLETED' || q.status === 'FAILED') {
+          stopPolling()
+          if (q.status === 'COMPLETED') onQuantizationReady?.(quantId)
+        }
       } catch { /* keep polling */ }
     }, 2000)
   }, [])
@@ -833,6 +838,323 @@ function QuantizationLab({ modelId, datasetId }: QuantizationLabProps) {
 }
 
 // ---------------------------------------------------------------------------
+// ServeConsole — RUNTIME stage
+// ---------------------------------------------------------------------------
+
+interface ServeConsoleProps {
+  modelId: string | null
+  quantizationId: string | null
+}
+
+function ServeConsole({ modelId, quantizationId }: ServeConsoleProps) {
+  const [health, setHealth] = useState<RuntimeHealthResponse | null>(null)
+  const [loadLoading, setLoadLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [predictValues, setPredictValues] = useState('')
+  const [prediction, setPrediction] = useState<PredictionResponse | null>(null)
+  const [predictLoading, setPredictLoading] = useState(false)
+  const [predictError, setPredictError] = useState<string | null>(null)
+  const [telemetry, setTelemetry] = useState<TelemetryResponse | null>(null)
+
+  useEffect(() => {
+    const tick = async () => {
+      try {
+        const [h, t] = await Promise.all([api.runtime.health(), api.runtime.telemetry()])
+        setHealth(h)
+        setTelemetry(t)
+      } catch { /* backend may not be running */ }
+    }
+    tick()
+    const interval = setInterval(tick, 3000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const loadModel = useCallback(async (precision: 'fp32' | 'int8') => {
+    setLoadLoading(true); setLoadError(null)
+    try {
+      const req = precision === 'fp32' ? { model_id: modelId! } : { quantization_id: quantizationId! }
+      const h = await api.runtime.load(req)
+      setHealth(h)
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Load failed')
+    } finally {
+      setLoadLoading(false)
+    }
+  }, [modelId, quantizationId])
+
+  const runPredict = useCallback(async () => {
+    setPredictLoading(true); setPredictError(null)
+    try {
+      const values = predictValues.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n))
+      if (values.length === 0) { setPredictError('Enter comma-separated numbers.'); return }
+      const result = await api.runtime.predict({ values })
+      setPrediction(result)
+    } catch (err) {
+      setPredictError(err instanceof Error ? err.message : 'Prediction failed')
+    } finally {
+      setPredictLoading(false)
+    }
+  }, [predictValues])
+
+  const statusColor = health?.status === 'ready' ? 'var(--green)' : health?.status === 'failed' ? 'var(--red)' : health?.status === 'loading' ? 'var(--cyan)' : '#6d7e90'
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: '340px' }}>
+      <div style={{ padding: '24px 28px', borderRight: '1px solid var(--border)' }}>
+        <div style={{ fontSize: '8px', letterSpacing: '.12em', color: '#6d7e90', marginBottom: '12px' }}>RUNTIME STATUS</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', color: statusColor, letterSpacing: '.05em' }}>
+            {health?.status?.toUpperCase() ?? 'OFFLINE'}
+          </span>
+          {health?.model_id && (
+            <span style={{ fontSize: '9px', color: '#6d7e90', fontFamily: 'var(--font-mono)' }}>
+              {health.model_id.slice(0, 8)}… · {health.precision?.toUpperCase()}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+          <button className="primary-button" onClick={() => loadModel('fp32')} disabled={loadLoading || !modelId} style={{ opacity: (!modelId || loadLoading) ? 0.65 : 1 }}>
+            {loadLoading ? <><Activity size={14} />LOADING…</> : <><Server size={14} />LOAD FP32</>}
+          </button>
+          <button className="outline-button" onClick={() => loadModel('int8')} disabled={loadLoading || !quantizationId} style={{ opacity: (!quantizationId || loadLoading) ? 0.65 : 1 }}>
+            {loadLoading ? <><Activity size={14} />LOADING…</> : <><Zap size={14} />LOAD INT8</>}
+          </button>
+        </div>
+        {loadError && <div style={{ fontSize: '9px', color: 'var(--red)', fontFamily: 'var(--font-mono)', letterSpacing: '.04em', marginBottom: '12px' }}>{loadError}</div>}
+        {telemetry && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {([
+              ['REQUESTS', String(telemetry.request_count)],
+              ['ERRORS', String(telemetry.error_count)],
+              ['MEAN LATENCY', telemetry.mean_latency_ms != null ? `${telemetry.mean_latency_ms.toFixed(2)} ms` : '—'],
+              ['P95 LATENCY', telemetry.p95_latency_ms != null ? `${telemetry.p95_latency_ms.toFixed(2)} ms` : '—'],
+            ] as [string, string][]).map(([label, val]) => (
+              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', fontFamily: 'var(--font-mono)', padding: '4px 0', borderBottom: '1px solid #13202e' }}>
+                <span style={{ color: '#6d7e90', letterSpacing: '.08em' }}>{label}</span>
+                <span style={{ color: 'var(--cyan)' }}>{val}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {!modelId && !quantizationId && (
+          <div style={{ fontSize: '9px', color: 'var(--amber)', letterSpacing: '.06em', marginTop: '8px', lineHeight: 1.6 }}>Train a model (TRAIN stage) and optionally quantize it (OPTIMIZE stage) to enable runtime loading.</div>
+        )}
+      </div>
+      <div style={{ padding: '24px 28px' }}>
+        <div style={{ fontSize: '8px', letterSpacing: '.12em', color: '#6d7e90', marginBottom: '12px' }}>LIVE INFERENCE</div>
+        <div style={{ marginBottom: '10px' }}>
+          <label style={_lbl}>SENSOR VALUES (comma-separated floats)</label>
+          <textarea
+            style={{ ..._inp, height: '56px', resize: 'vertical', lineHeight: 1.5 } as React.CSSProperties}
+            value={predictValues}
+            onChange={e => setPredictValues(e.target.value)}
+            placeholder="0.0, 0.1, -0.2, 0.3, …"
+          />
+        </div>
+        <div style={{ marginBottom: '14px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <button className="primary-button" onClick={runPredict} disabled={predictLoading || health?.status !== 'ready'} style={{ opacity: (predictLoading || health?.status !== 'ready') ? 0.65 : 1 }}>
+            {predictLoading ? <><Activity size={14} />RUNNING…</> : <><Radio size={14} />PREDICT</>}
+          </button>
+          {predictError && <span style={{ fontSize: '9px', color: 'var(--red)', fontFamily: 'var(--font-mono)' }}>{predictError}</span>}
+        </div>
+        {prediction ? (
+          <div style={{ padding: '12px', background: '#090e16', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '14px', color: 'var(--cyan)', letterSpacing: '.05em' }}>{prediction.predicted_class}</span>
+              <span style={{ fontSize: '9px', color: '#6d7e90' }}>PREDICTED CLASS</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <div>
+                <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>CONFIDENCE</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--green)' }}>{(prediction.confidence * 100).toFixed(1)}%</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '7px', color: '#6d7e90', letterSpacing: '.08em' }}>LATENCY</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--amber)' }}>{prediction.latency_ms.toFixed(2)} ms</div>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: '7px', letterSpacing: '.1em', color: '#6d7e90', marginBottom: '6px' }}>CLASS PROBABILITIES</div>
+              {Object.entries(prediction.probabilities).map(([cls, prob]) => (
+                <div key={cls} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
+                  <span style={{ fontSize: '8px', fontFamily: 'var(--font-mono)', color: '#6d7e90', width: '120px', flexShrink: 0 }}>{cls}</span>
+                  <div style={{ flex: 1, height: '4px', background: '#1a2535', borderRadius: '2px', overflow: 'hidden' }}>
+                    <div style={{ width: `${prob * 100}%`, height: '100%', background: cls === prediction.predicted_class ? 'var(--cyan)' : 'var(--violet)', opacity: 0.7 }} />
+                  </div>
+                  <span style={{ fontSize: '8px', fontFamily: 'var(--font-mono)', color: '#6d7e90', width: '36px', textAlign: 'right' }}>{(prob * 100).toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '160px', gap: '10px', color: '#405060', textAlign: 'center' }}>
+            <Radio size={26} strokeWidth={1} />
+            <div style={{ fontSize: '9px', letterSpacing: '.08em', lineHeight: 1.6 }}>Load a model then enter sensor values<br />to run live inference through SQRuntime.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// BenchmarkArena — BENCHMARK stage
+// ---------------------------------------------------------------------------
+
+interface BenchmarkArenaProps {
+  modelId: string | null
+  quantizationId: string | null
+}
+
+function BenchmarkArena({ modelId, quantizationId }: BenchmarkArenaProps) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [benchmark, setBenchmark] = useState<BenchmarkResponse | null>(null)
+  const [iterations, setIterations] = useState(50)
+  const [warmup, setWarmup] = useState(10)
+  const [precision, setPrecision] = useState<'fp32' | 'int8'>('fp32')
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = () => {
+    if (pollRef.current !== null) { clearInterval(pollRef.current); pollRef.current = null }
+  }
+  useEffect(() => () => stopPolling(), [])
+
+  const startPolling = useCallback((benchId: string) => {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      try {
+        const b = await api.benchmarks.get(benchId)
+        setBenchmark(b)
+        if (b.status === 'COMPLETED' || b.status === 'FAILED') stopPolling()
+      } catch { /* keep polling */ }
+    }, 2000)
+  }, [])
+
+  const runBenchmark = useCallback(async () => {
+    if (precision === 'fp32' && !modelId) { setError('Train a model first (TRAIN stage).'); return }
+    if (precision === 'int8' && !quantizationId) { setError('Quantize a model first (OPTIMIZE stage).'); return }
+    setLoading(true); setError(null)
+    try {
+      const resp = await api.benchmarks.run({
+        ...(precision === 'fp32' ? { model_id: modelId! } : { quantization_id: quantizationId! }),
+        batch_sizes: [1, 4, 8, 16],
+        iterations,
+        warmup,
+        seed: 42,
+      })
+      const initial: BenchmarkResponse = {
+        benchmark_id: resp.benchmark_id,
+        human_id: resp.human_id,
+        model_id: resp.model_id,
+        runtime_variant: resp.runtime_variant,
+        device: 'cpu',
+        status: resp.status,
+        iterations,
+        warmup_count: warmup,
+        batch_results: null,
+        latency_metrics: null,
+        throughput: null,
+        memory: null,
+        hardware_info: null,
+        artifact_path: null,
+        duration_seconds: null,
+        error: null,
+        created_at: new Date().toISOString(),
+      }
+      setBenchmark(initial)
+      startPolling(resp.benchmark_id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Benchmark failed to start')
+    } finally {
+      setLoading(false)
+    }
+  }, [precision, modelId, quantizationId, iterations, warmup, startPolling])
+
+  const isRunning = benchmark?.status === 'PENDING' || benchmark?.status === 'RUNNING'
+  const statusColor = benchmark?.status === 'COMPLETED' ? 'var(--green)' : benchmark?.status === 'FAILED' ? 'var(--red)' : benchmark?.status === 'RUNNING' ? 'var(--cyan)' : '#6d7e90'
+  const batchResults: BatchResult[] = benchmark?.batch_results ?? []
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', minHeight: '340px' }}>
+      <div style={{ padding: '24px 28px', borderRight: '1px solid var(--border)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px', marginBottom: '20px' }}>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={_lbl}>PRECISION TARGET</label>
+            <select style={_inp} value={precision} onChange={e => setPrecision(e.target.value as 'fp32' | 'int8')}>
+              <option value="fp32">FP32 MODEL</option>
+              <option value="int8">INT8 QUANTIZED</option>
+            </select>
+          </div>
+          <div>
+            <label style={_lbl}>ITERATIONS</label>
+            <input style={_inp} type="number" value={iterations} onChange={e => setIterations(Number(e.target.value))} min={10} max={1000} step={10} />
+          </div>
+          <div>
+            <label style={_lbl}>WARMUP RUNS</label>
+            <input style={_inp} type="number" value={warmup} onChange={e => setWarmup(Number(e.target.value))} min={1} max={100} />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="primary-button" onClick={runBenchmark} disabled={loading || isRunning} style={{ opacity: (loading || isRunning) ? 0.65 : 1 }}>
+            {loading ? <><Activity size={14} />STARTING…</> : isRunning ? <><Activity size={14} />RUNNING…</> : <><Gauge size={14} />RUN BENCHMARK</>}
+          </button>
+          {error && <span style={{ fontSize: '9px', color: 'var(--red)', fontFamily: 'var(--font-mono)', letterSpacing: '.05em' }}>{error}</span>}
+        </div>
+        {benchmark && (
+          <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--violet)', letterSpacing: '.05em' }}>{benchmark.human_id}</span>
+            <span style={{ border: `1px solid ${statusColor}22`, color: statusColor, padding: '3px 7px', fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '.08em' }}>{benchmark.status}</span>
+            {isRunning && <Activity size={12} style={{ color: 'var(--cyan)', animation: 'spin 1s linear infinite' }} />}
+          </div>
+        )}
+        {benchmark?.status === 'FAILED' && benchmark.error && (
+          <div style={{ marginTop: '10px', fontSize: '9px', color: 'var(--red)', fontFamily: 'var(--font-mono)', padding: '8px', background: '#160a0a', border: '1px solid #4a1515', letterSpacing: '.04em', lineHeight: 1.5 }}>
+            ERROR: {benchmark.error}
+          </div>
+        )}
+        {!modelId && !quantizationId && (
+          <div style={{ marginTop: '16px', fontSize: '9px', color: 'var(--amber)', letterSpacing: '.06em', lineHeight: 1.6 }}>Train a model then optionally quantize it to benchmark.</div>
+        )}
+      </div>
+      <div style={{ padding: '24px 28px', overflowY: 'auto' }}>
+        <div style={{ fontSize: '8px', letterSpacing: '.12em', color: '#6d7e90', marginBottom: '12px' }}>BATCH SIZE RESULTS · P50 / P95 / P99 / THROUGHPUT</div>
+        {batchResults.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr 1fr 1fr 1fr', gap: '8px', fontSize: '7px', letterSpacing: '.1em', color: '#6d7e90', paddingBottom: '6px', borderBottom: '1px solid var(--border)' }}>
+              <span>BATCH</span><span>P50</span><span>P95</span><span>P99</span><span>THROUGHPUT</span>
+            </div>
+            {batchResults.filter(r => r.status === 'COMPLETED').map(r => (
+              <div key={r.batch_size} style={{ display: 'grid', gridTemplateColumns: '50px 1fr 1fr 1fr 1fr', gap: '8px', fontSize: '10px', fontFamily: 'var(--font-mono)', padding: '6px 0', borderBottom: '1px solid #13202e', alignItems: 'center' }}>
+                <span style={{ color: 'var(--cyan)' }}>×{r.batch_size}</span>
+                <span>{r.latency_stats?.p50?.toFixed(2) ?? '—'} ms</span>
+                <span style={{ color: 'var(--amber)' }}>{r.latency_stats?.p95?.toFixed(2) ?? '—'} ms</span>
+                <span>{r.latency_stats?.p99?.toFixed(2) ?? '—'} ms</span>
+                <span style={{ color: 'var(--green)' }}>{r.throughput_rps?.toFixed(0) ?? '—'}/s</span>
+              </div>
+            ))}
+            {benchmark?.duration_seconds != null && (
+              <div style={{ fontSize: '8px', color: '#405060', letterSpacing: '.06em', marginTop: '6px', lineHeight: 1.6 }}>
+                {benchmark.duration_seconds.toFixed(1)}s total · {benchmark.runtime_variant?.toUpperCase()} · {benchmark.device?.toUpperCase()}<br />
+                {benchmark.iterations} iterations · {benchmark.warmup_count} warmup runs excluded
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '220px', gap: '12px', color: '#405060', textAlign: 'center' }}>
+            <BarChart3 size={28} strokeWidth={1} />
+            <div>
+              <div style={{ fontSize: '10px', letterSpacing: '.12em', marginBottom: '6px' }}>BENCHMARK ARENA READY</div>
+              <div style={{ fontSize: '9px', letterSpacing: '.08em', color: '#354454', lineHeight: 1.6 }}>Run benchmark to measure P50/P95/P99 latency<br />and throughput across batch sizes 1 · 4 · 8 · 16.</div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -863,6 +1185,8 @@ function App() {
   const [trainedExpHumanId, setTrainedExpHumanId] = useState<string | null>(null)
   // FP32 model_id set when experiment completes — passed to OPTIMIZE stage
   const [trainedModelId, setTrainedModelId] = useState<string | null>(null)
+  // INT8 quantization_id set when quantization completes — passed to RUNTIME + BENCHMARK stages
+  const [quantizationId, setQuantizationId] = useState<string | null>(null)
 
   const generateDataset = useCallback(async () => {
     setDsLoading(true)
@@ -959,7 +1283,16 @@ function App() {
           <QuantizationLab
             modelId={trainedModelId}
             datasetId={dsResult?.dataset_id ?? null}
+            onQuantizationReady={(qid) => setQuantizationId(qid)}
           />
+        </Panel>
+      ) : active === 'runtime' ? (
+        <Panel title="SERVE CONSOLE" eyebrow="SQRUNTIME / LIVE INFERENCE" className="focused-panel">
+          <ServeConsole modelId={trainedModelId} quantizationId={quantizationId} />
+        </Panel>
+      ) : active === 'benchmark' ? (
+        <Panel title="BENCHMARK ARENA" eyebrow="LATENCY · THROUGHPUT · MEMORY" className="focused-panel">
+          <BenchmarkArena modelId={trainedModelId} quantizationId={quantizationId} />
         </Panel>
       ) : active !== 'overview' ? (
         <Panel title={`${activeStage?.label} MODULE`} eyebrow="ACTIVE STAGE" className="focused-panel"><div className="focused-stage"><div className="focused-icon"><ActiveIcon size={30} /></div><div><h3>{activeStage.sub}</h3><p>This module is connected to the <span className="mono">sensor-transformer-int8</span> lineage. Select a downstream node or return to overview to inspect the full system map.</p></div><button className="primary-button" onClick={() => setActive('overview')}>VIEW SYSTEM MAP <ArrowUpRight size={14} /></button></div></Panel>
