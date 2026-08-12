@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "synthquanta-backend"
+version = "0.1.0"
+description = "SynthQuanta backend — synthetic sensor-data engineering platform"
+requires-python = ">=3.11"
+dependencies = [
+    # API
+    "fastapi[standard]>=0.115",
+    "uvicorn[standard]>=0.30",
+    # Config
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "python-dotenv>=1.0",
+    # Database
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg2-binary>=2.9",
+    # HTTP client (tests / integration)
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "anyio>=4.0",
+]
+# ML dependencies — installed in Phase 3
+ml = [
+    "torch>=2.2",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "scikit-learn>=1.5",
+    "transformers>=4.40",
+    "peft>=0.11",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.pyright]
+pythonVersion = "3.11"

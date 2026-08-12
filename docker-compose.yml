@@ -1,0 +1,63 @@
+# SynthQuanta — Docker Compose
+# Phase 1 skeleton. Full service configuration completed in Phase 6.
+#
+# Usage (Phase 6+):
+#   docker compose up --build
+#
+# Services:
+#   frontend  — Next.js UI          http://localhost:3000
+#   backend   — FastAPI             http://localhost:8000
+#   postgres  — PostgreSQL          localhost:5432
+#
+# SQRuntime is part of the backend service for MVP.
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: synthquanta
+      POSTGRES_PASSWORD: synthquanta
+      POSTGRES_DB: synthquanta
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synthquanta"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql://synthquanta:synthquanta@postgres:5432/synthquanta
+      ARTIFACT_ROOT: /app/artifacts
+      CORS_ORIGINS: http://localhost:3000
+      LOG_LEVEL: INFO
+    volumes:
+      - ./artifacts:/app/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
