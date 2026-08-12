@@ -4,5 +4,6 @@ from app.db.models.evaluation import Evaluation
 from app.db.models.ml_model import MLModel
 from app.db.models.benchmark import Benchmark
 from app.db.models.job import Job
+from app.db.models.quantization import Quantization
 
-__all__ = ["Dataset", "Experiment", "Evaluation", "MLModel", "Benchmark", "Job"]
+__all__ = ["Dataset", "Experiment", "Evaluation", "MLModel", "Benchmark", "Job", "Quantization"]

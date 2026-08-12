@@ -48,6 +48,12 @@ class ArtifactStore:
     def benchmark_path(self, benchmark_id: str) -> Path:
         return self._safe_subpath("benchmarks", benchmark_id)
 
+    def evaluation_path(self, evaluation_id: str) -> Path:
+        return self._safe_subpath("evaluations", evaluation_id)
+
+    def quantization_path(self, quantization_id: str) -> Path:
+        return self._safe_subpath("quantizations", quantization_id)
+
     # ------------------------------------------------------------------
     # Directory management
     # ------------------------------------------------------------------
@@ -128,6 +134,6 @@ class ArtifactStore:
             )
 
     def _ensure_root_dirs(self) -> None:
-        for subdir in ("datasets", "models", "experiments", "benchmarks"):
+        for subdir in ("datasets", "models", "experiments", "benchmarks", "evaluations", "quantizations"):
             (self._root / subdir).mkdir(parents=True, exist_ok=True)
         logger.debug("Artifact root initialized at %s", self._root)
